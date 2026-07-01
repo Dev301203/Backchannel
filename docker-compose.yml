@@ -1,0 +1,73 @@
+# Local / single-node stack. For real scale, run the `server` image behind a
+# load balancer with sticky-free routing (WebSockets are fine to spread — Redis
+# fans out across instances) and point DATABASE_URL at pgbouncer. See DEPLOYMENT.md.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: backchannel
+      POSTGRES_PASSWORD: backchannel
+      POSTGRES_DB: backchannel
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U backchannel']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot: create/upgrade auth tables + app schema + partitions, then exit.
+  migrate:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    command: ['npm', 'run', 'migrate']
+    env_file:
+      - server/.env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://backchannel:backchannel@postgres:5432/backchannel
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: 'no'
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    env_file:
+      - server/.env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://backchannel:backchannel@postgres:5432/backchannel
+      REDIS_URL: redis://redis:6379
+    ports:
+      - '8080:8080'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:

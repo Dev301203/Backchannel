@@ -1,0 +1,56 @@
+# Render Blueprint — one free web service running the Backchannel API.
+#
+# Free-tier shape: single instance, in-memory driver (no Redis needed), managed
+# Postgres from Neon. Deploy:
+#   1. Create a free Neon project, copy its POOLED connection string.
+#   2. In the Render dashboard: New > Blueprint, point at this repo.
+#   3. Set the `sync: false` env vars below (marked "set in dashboard").
+#   4. After first deploy, set BASE_URL / BETTER_AUTH_URL to the service URL
+#      Render assigns (https://backchannel-api.onrender.com), then redeploy.
+#   5. Put chrome-extension://<your-id> into TRUSTED_ORIGINS.
+#
+# Note the free-tier behavior: the service sleeps after 15 min with ZERO
+# connections and cold-starts (~30-60s) on the next connect. An open sidebar's
+# 20s ping keeps it warm, so only the first arrival after a fully quiet period
+# waits. Upgrade to the $7/mo Starter plan to remove sleep entirely.
+
+services:
+  - type: web
+    name: backchannel-api
+    runtime: docker
+    repo: https://github.com/YOUR_ORG/backchannel # change to your repo
+    branch: main
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    # Runs migrations (auth tables + app schema + partitions), then starts.
+    dockerCommand: npm run start:prod
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Single free instance ⇒ in-process fanout/presence/rate-limit, no Redis.
+      - key: PUBSUB_DRIVER
+        value: memory
+      # Strong secret, generated once by Render and kept stable.
+      - key: BETTER_AUTH_SECRET
+        generateValue: true
+      # --- set in dashboard (sync: false) -------------------------------
+      - key: DATABASE_URL # Neon POOLED connection string
+        sync: false
+      - key: BASE_URL # https://backchannel-api.onrender.com
+        sync: false
+      - key: BETTER_AUTH_URL # same as BASE_URL
+        sync: false
+      - key: TRUSTED_ORIGINS # chrome-extension://<id>[,https://...]
+        sync: false
+      # --- optional social login (leave unset to disable) ---------------
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false

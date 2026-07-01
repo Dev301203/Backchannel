@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Backchannel",
+  "version": "0.1.0",
+  "description": "A public chat room for every website. See who else is here.",
+  "minimum_chrome_version": "116",
+
+  "permissions": ["storage", "tabs", "alarms", "identity"],
+  "host_permissions": [
+    "https://api.backchannel.app/*",
+    "http://localhost:8080/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_title": "Toggle Backchannel",
+    "default_icon": {
+      "16": "icons/16.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+
+  "icons": {
+    "16": "icons/16.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  }
+}
