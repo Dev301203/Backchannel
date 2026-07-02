@@ -24,10 +24,15 @@ let visible = false;
 let profile = null;          // { id, handle, color } for the local user
 
 // 12-color handle palette, indexed by the server-assigned displayColor.
+// Tuned to stay legible on both dark and light backgrounds without shouting.
 const PALETTE = [
-  '#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#46f0f0',
-  '#f032e6', '#bcf60c', '#fabebe', '#008080', '#9a6324', '#800000',
+  '#f87171', '#fb923c', '#fbbf24', '#a3e635',
+  '#4ade80', '#2dd4bf', '#22d3ee', '#60a5fa',
+  '#a78bfa', '#e879f9', '#f472b6', '#94a3b8',
 ];
+
+// Tracks the last rendered author so consecutive messages can be grouped.
+let lastMsgHandle = null;
 
 // Proxy account actions to the service worker (which owns chrome.identity).
 function account(action, extra = {}) {
@@ -102,39 +107,176 @@ function buildSidebar() {
 
   root.innerHTML = `
     <style>
-      .panel { width: 320px; height: 100vh; display: flex; flex-direction: column;
-               background: #fff; color: #1a1a1a; border-left: 1px solid #ddd;
-               font: 14px/1.45 system-ui, sans-serif;
-               transform: translateX(100%); transition: transform .18s ease; }
+      :host, .panel * { box-sizing: border-box; }
+
+      .panel {
+        width: 340px; height: 100vh;
+        display: flex; flex-direction: column;
+        background: #17171a; color: #ececef;
+        border-left: 1px solid #2a2a2f;
+        font: 13.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI",
+              Roboto, "Helvetica Neue", Arial, sans-serif;
+        letter-spacing: -0.005em;
+        transform: translateX(100%);
+        transition: transform .22s cubic-bezier(.4,0,.2,1);
+      }
       .panel.open { transform: none; }
-      header { padding: 10px 12px; border-bottom: 1px solid #eee;
-               display: flex; align-items: baseline; gap: 8px; }
-      header h1 { font-size: 13px; font-weight: 600; margin: 0; overflow: hidden;
-                  text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-      #presence { font-size: 12px; color: #777; }
-      #status[data-state="down"]::after { content: "reconnecting…"; color: #b00; font-size: 11px; }
-      #log { flex: 1; overflow-y: auto; padding: 8px 12px; }
-      .m { margin: 2px 0; word-wrap: break-word; }
-      .m b { font-weight: 600; }
-      form { display: flex; border-top: 1px solid #eee; }
-      input { flex: 1; border: 0; padding: 10px 12px; font: inherit; outline: none; }
-      button { border: 0; background: none; padding: 0 12px; cursor: pointer; color: #555; }
-      .icon { font-size: 14px; }
-      #settings { display: none; padding: 12px; border-bottom: 1px solid #eee;
-                  flex-direction: column; gap: 8px; background: #fafafa; }
+
+      /* ---- Header ---------------------------------------------------- */
+      header {
+        padding: 11px 14px;
+        display: flex; align-items: center; gap: 10px;
+        background: #1d1d21;
+        border-bottom: 1px solid #2a2a2f;
+      }
+      header h1 {
+        font-size: 13px; font-weight: 600; margin: 0; flex: 1;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      #presence {
+        font-size: 12px; color: #9a9aa1;
+        display: inline-flex; align-items: center; gap: 6px;
+      }
+      #presence::before {
+        content: ''; width: 6px; height: 6px; border-radius: 50%;
+        background: #34d399;
+        box-shadow: 0 0 0 3px rgba(52,211,153,.15);
+      }
+      #status[data-state="down"]::after {
+        content: 'reconnecting…'; color: #f87171;
+        font-size: 11px; margin-left: 6px;
+      }
+      #gear {
+        border: 0; background: transparent; color: #9a9aa1;
+        width: 28px; height: 28px; border-radius: 7px;
+        cursor: pointer; padding: 0; font-size: 15px;
+        display: inline-flex; align-items: center; justify-content: center;
+        transition: background .12s ease, color .12s ease;
+      }
+      #gear:hover { background: #2a2a2f; color: #ececef; }
+
+      /* ---- Settings drawer ------------------------------------------- */
+      #settings {
+        display: none;
+        padding: 12px 14px 14px;
+        border-bottom: 1px solid #2a2a2f;
+        flex-direction: column; gap: 8px;
+        background: #1d1d21;
+      }
       #settings.show { display: flex; }
+      #whoami { font-size: 11.5px; color: #9a9aa1; margin-bottom: 2px; }
       #settings .row { display: flex; gap: 6px; }
-      #settings input { border: 1px solid #ccc; border-radius: 6px; }
-      #settings .btn { border: 1px solid #ccc; border-radius: 6px; padding: 6px 10px;
-                       background: #fff; color: #333; white-space: nowrap; }
-      #settings small { color: #888; }
-      #whoami { font-size: 12px; color: #777; }
-      @media (prefers-color-scheme: dark) {
-        .panel { background: #1c1c1e; color: #eee; border-color: #333; }
-        header, form { border-color: #333; }
-        input { background: none; color: #eee; }
-        #settings { background: #242426; border-color: #333; }
-        #settings input, #settings .btn { background: #2c2c2e; color: #eee; border-color: #444; }
+      #settings input,
+      #settings .btn {
+        border: 1px solid #313138;
+        background: #26262b;
+        color: #ececef;
+        border-radius: 8px;
+        padding: 7px 11px;
+        font: inherit;
+        outline: none;
+        transition: background .12s ease, border-color .12s ease;
+      }
+      #settings input { flex: 1; }
+      #settings input:focus {
+        border-color: #4a90e2;
+        background: #2a2a30;
+      }
+      #settings input::placeholder { color: #6c6c74; }
+      #settings .btn { cursor: pointer; white-space: nowrap; }
+      #settings .btn:hover { background: #30303a; border-color: #3e3e48; }
+      #settings .btn:active { background: #26262b; }
+      #settings small {
+        color: #9a9aa1; font-size: 11.5px; min-height: 14px;
+      }
+
+      /* ---- Log ------------------------------------------------------- */
+      #log {
+        flex: 1; overflow-y: auto;
+        padding: 12px 14px 14px;
+        scrollbar-width: thin;
+        scrollbar-color: #3a3a42 transparent;
+      }
+      #log::-webkit-scrollbar { width: 8px; }
+      #log::-webkit-scrollbar-track { background: transparent; }
+      #log::-webkit-scrollbar-thumb {
+        background: #3a3a42;
+        border-radius: 4px;
+        border: 2px solid transparent;
+        background-clip: content-box;
+      }
+      #log::-webkit-scrollbar-thumb:hover {
+        background: #4a4a54; background-clip: content-box;
+      }
+
+      .m {
+        margin: 8px 0 0;
+        word-wrap: break-word; overflow-wrap: anywhere;
+      }
+      .m:first-child { margin-top: 0; }
+      .m.grouped { margin-top: 2px; }
+      .m .name {
+        font-weight: 600; font-size: 12.5px; margin-right: 6px;
+      }
+      .m.grouped .name { display: none; }
+      .m .body { color: #ececef; }
+
+      /* ---- Composer -------------------------------------------------- */
+      form {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 12px;
+        border-top: 1px solid #2a2a2f;
+        background: #1d1d21;
+      }
+      input#box {
+        flex: 1;
+        border: 1px solid #313138;
+        background: #26262b;
+        color: #ececef;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font: inherit;
+        outline: none;
+        transition: background .12s ease, border-color .12s ease;
+      }
+      input#box:focus { border-color: #4a90e2; background: #2a2a30; }
+      input#box::placeholder { color: #6c6c74; }
+      form button {
+        border: 0;
+        background: #313138;
+        color: #ececef;
+        width: 30px; height: 30px;
+        border-radius: 50%;
+        cursor: pointer; padding: 0;
+        display: inline-flex; align-items: center; justify-content: center;
+        font-size: 15px; line-height: 1;
+        transition: background .12s ease, transform .08s ease;
+      }
+      form button:hover { background: #3e3e48; }
+      form button:active { transform: scale(.94); }
+
+      /* ---- Light theme ---------------------------------------------- */
+      @media (prefers-color-scheme: light) {
+        .panel { background: #fff; color: #1a1a1a; border-color: #e5e5ea; }
+        header { background: #f6f6f7; border-color: #e5e5ea; }
+        #presence { color: #6d6d72; }
+        #gear { color: #6d6d72; }
+        #gear:hover { background: #ececef; color: #1a1a1a; }
+        #settings { background: #f6f6f7; border-color: #e5e5ea; }
+        #whoami { color: #6d6d72; }
+        #settings input, #settings .btn {
+          background: #fff; border-color: #d9d9de; color: #1a1a1a;
+        }
+        #settings input:focus { border-color: #4a90e2; background: #fff; }
+        #settings input::placeholder { color: #a1a1a6; }
+        #settings .btn:hover { background: #f0f0f3; border-color: #cbcbcf; }
+        #settings small { color: #6d6d72; }
+        form { background: #f6f6f7; border-color: #e5e5ea; }
+        input#box { background: #fff; border-color: #d9d9de; color: #1a1a1a; }
+        input#box::placeholder { color: #a1a1a6; }
+        form button { background: #e5e5ea; color: #1a1a1a; }
+        form button:hover { background: #d9d9de; }
+        .m .body { color: #1a1a1a; }
       }
     </style>
     <div class="panel">
@@ -237,19 +379,29 @@ function setMsg(text) { if (ui.settingsMsg) ui.settingsMsg.textContent = text; }
 function renderMessage(msg) {
   const el = document.createElement('div');
   el.className = 'm';
-  const name = document.createElement('b');
-  name.textContent = msg.handle + ' ';        // textContent everywhere: no XSS
+  if (msg.handle === lastMsgHandle) el.classList.add('grouped');
+  lastMsgHandle = msg.handle;
+
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = msg.handle;              // textContent everywhere: no XSS
   if (typeof msg.color === 'number') name.style.color = PALETTE[msg.color % PALETTE.length];
   const body = document.createElement('span');
+  body.className = 'body';
   body.textContent = msg.body;
   el.append(name, body);
+
   const atBottom = ui.log.scrollTop + ui.log.clientHeight >= ui.log.scrollHeight - 40;
   ui.log.appendChild(el);
   if (atBottom) ui.log.scrollTop = ui.log.scrollHeight;   // don't yank scroll
   while (ui.log.children.length > 300) ui.log.firstChild.remove();
+  ui.log.firstElementChild?.classList.remove('grouped');
 }
 
-function clearMessages() { if (ui.log) ui.log.replaceChildren(); }
+function clearMessages() {
+  lastMsgHandle = null;
+  if (ui.log) ui.log.replaceChildren();
+}
 function setHeader(room) { if (ui.room) ui.room.textContent = room; }
 
 function toggle() {
