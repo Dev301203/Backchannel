@@ -1,3 +1,9 @@
+import {
+  RegExpMatcher,
+  TextCensor,
+  englishDataset,
+  englishRecommendedTransformers,
+} from 'obscenity';
 import { counters } from './drivers/index.js';
 import { env } from './env.js';
 
@@ -5,48 +11,59 @@ import { env } from './env.js';
  * Lightweight content moderation. This is the "day one" layer the design calls
  * for — deliberately conservative so it can't be the sole defense:
  *   - hard blocklist (slurs / illegal) → reject outright
+ *   - common profanity → censor with asterisks, pass through
  *   - obvious spam heuristics (flooding same char, all-links) → reject
  *   - everything else passes; the report queue + human/volunteer mods handle
  *     the long tail.
- *
- * Swap `HARD_BLOCK` for a maintained list or a hosted classification API as you
- * grow; keep the interface identical.
  */
 
-// Kept intentionally tiny and non-exhaustive here. In production load a
-// maintained list from a file/secret and compile it once at boot.
+// Reject-outright list. Kept small: reserve for slurs and content we don't
+// want on the site under any framing. Load from a vetted secret file in prod.
 const HARD_BLOCK: RegExp[] = [
-  // Placeholder patterns; real deployments should replace with a vetted list.
   /\bkill\s+your\s*self\b/i,
 ];
+
+// Common-profanity matcher. `englishDataset` covers the usual list and is
+// leet-speak / diacritic aware via `englishRecommendedTransformers`. Built once
+// at module load; the matcher is stateless and safe to reuse across requests.
+const profanityMatcher = new RegExpMatcher({
+  ...englishDataset.build(),
+  ...englishRecommendedTransformers,
+});
+const profanityCensor = new TextCensor();
 
 const URL_RE = /\bhttps?:\/\/\S+/gi;
 
 export interface ModerationResult {
   ok: boolean;
   reason?: string;
-  /** Possibly transformed body (e.g. trimmed). */
+  /** Possibly transformed body (e.g. trimmed or censored). */
   body?: string;
 }
 
 export function moderateContent(raw: string): ModerationResult {
-  const body = raw.replace(/\s+/g, ' ').trim();
+  const collapsed = raw.replace(/\s+/g, ' ').trim();
 
-  if (body.length === 0) return { ok: false, reason: 'empty' };
-  if (body.length > 500) return { ok: false, reason: 'too_long' };
+  if (collapsed.length === 0) return { ok: false, reason: 'empty' };
+  if (collapsed.length > 500) return { ok: false, reason: 'too_long' };
 
   for (const re of HARD_BLOCK) {
-    if (re.test(body)) return { ok: false, reason: 'blocked' };
+    if (re.test(collapsed)) return { ok: false, reason: 'blocked' };
   }
 
   // Flood: same character repeated 15+ times.
-  if (/(.)\1{14,}/.test(body)) return { ok: false, reason: 'flood' };
+  if (/(.)\1{14,}/.test(collapsed)) return { ok: false, reason: 'flood' };
 
   // All-links spam: message is nothing but 3+ URLs.
-  const urls = body.match(URL_RE) ?? [];
-  if (urls.length >= 3 && body.replace(URL_RE, '').trim().length < 5) {
+  const urls = collapsed.match(URL_RE) ?? [];
+  if (urls.length >= 3 && collapsed.replace(URL_RE, '').trim().length < 5) {
     return { ok: false, reason: 'link_spam' };
   }
+
+  const matches = profanityMatcher.getAllMatches(collapsed);
+  const body = matches.length > 0
+    ? profanityCensor.applyTo(collapsed, matches)
+    : collapsed;
 
   return { ok: true, body };
 }

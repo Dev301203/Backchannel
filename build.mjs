@@ -20,7 +20,10 @@ import { existsSync } from 'node:fs';
 const watch = process.argv.includes('--watch');
 const OUT = 'dist';
 
-const API_URL = process.env.BC_API_URL ?? 'https://api.backchannel.app';
+// Default to the local dev server so plain `npm run build` produces a bundle
+// that talks to docker-compose / `npm run dev` out of the box. For a hosted
+// build, override with e.g. `BC_API_URL=https://api.backchannel.app npm run build`.
+const API_URL = process.env.BC_API_URL ?? 'http://localhost:8080';
 
 const common = {
   bundle: true,

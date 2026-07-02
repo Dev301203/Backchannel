@@ -30,22 +30,37 @@ function captureRotatedToken(res) {
   if (t) void storeToken(t);
 }
 
+// Memoize the anonymous-provision round-trip so concurrent callers (e.g. the
+// socket join and the profile fetch racing on first use) share one identity.
+// Without this, each caller was provisioning its own session and the last write
+// to storage clobbered the others — producing a different handle per tab.
+let anonInflight = null;
+
 /** Return a valid token, provisioning an anonymous session if none exists. */
 export async function ensureToken() {
-  let token = await getStoredToken();
-  if (token) return token;
+  const stored = await getStoredToken();
+  if (stored) return stored;
+  if (anonInflight) return anonInflight;
 
-  const res = await fetch(`${API_URL}/api/auth/sign-in/anonymous`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: '{}',
-  });
-  if (!res.ok) throw new Error(`anonymous sign-in failed: ${res.status}`);
-  captureRotatedToken(res);
+  anonInflight = (async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/auth/sign-in/anonymous`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      if (!res.ok) throw new Error(`anonymous sign-in failed: ${res.status}`);
+      captureRotatedToken(res);
 
-  const data = await res.json().catch(() => ({}));
-  if (data?.token) await storeToken(data.token);
-  return getStoredToken();
+      const data = await res.json().catch(() => ({}));
+      if (data?.token) await storeToken(data.token);
+      return getStoredToken();
+    } finally {
+      anonInflight = null;
+    }
+  })();
+
+  return anonInflight;
 }
 
 /** fetch() wrapper that attaches the bearer token and captures rotations. */

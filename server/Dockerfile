@@ -8,9 +8,18 @@ WORKDIR /app
 COPY server/package.json server/package-lock.json* ./server/
 RUN cd server && (npm ci || npm install)
 
-# App source + the shared normalizer (resolved as ../../normalize.js).
+# The shared /app/normalize.js is ESM and depends on `tldts`. Copying the repo
+# root's package.json here (a) marks /app as "type": "module" so Node treats
+# normalize.js as ESM, and (b) installs tldts into /app/node_modules so
+# normalize.js can resolve it. --omit=dev skips the extension's build tooling.
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev --no-audit --no-fund
+
+# App source + the shared normalizer (resolved as ../../normalize.js) + the
+# application schema (migrate.ts reads it as ../../../schema.sql).
 COPY server ./server
 COPY normalize.js ./normalize.js
+COPY schema.sql ./schema.sql
 
 WORKDIR /app/server
 ENV NODE_ENV=production
