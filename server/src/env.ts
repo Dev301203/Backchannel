@@ -52,6 +52,13 @@ const schema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().optional().default(''),
   GITHUB_CLIENT_ID: z.string().optional().default(''),
   GITHUB_CLIENT_SECRET: z.string().optional().default(''),
+  DISCORD_CLIENT_ID: z.string().optional().default(''),
+  DISCORD_CLIENT_SECRET: z.string().optional().default(''),
+  // Apple wants a Services ID as clientId and a pre-signed JWT as clientSecret.
+  // See https://www.better-auth.com/docs/authentication/apple for how to mint
+  // the JWT from your Apple team id + key id + p8 private key.
+  APPLE_CLIENT_ID: z.string().optional().default(''),
+  APPLE_CLIENT_SECRET: z.string().optional().default(''),
 
   RATE_LIMIT_MSGS: int(5),
   RATE_LIMIT_WINDOW_SEC: int(5),
@@ -91,4 +98,6 @@ if (DRIVER === 'redis' && !env.REDIS_URL) {
 export const socialEnabled = {
   google: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
   github: Boolean(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET),
+  discord: Boolean(env.DISCORD_CLIENT_ID && env.DISCORD_CLIENT_SECRET),
+  apple: Boolean(env.APPLE_CLIENT_ID && env.APPLE_CLIENT_SECRET),
 };

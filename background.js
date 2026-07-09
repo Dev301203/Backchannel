@@ -24,8 +24,12 @@ import {
   ensureToken,
   getProfile,
   setHandle,
+  setColor,
   signOut,
   signInWithProvider,
+  getAuthConfig,
+  sendEmailOTP,
+  verifyEmailOTP,
 } from './auth.js';
 import { API_URL, WS_URL } from './config.js';
 
@@ -159,6 +163,18 @@ chrome.action.onClicked.addListener((tab) => {
   if (tab.id) chrome.tabs.sendMessage(tab.id, { t: 'toggle' }).catch(() => {});
 });
 
+// Pop the sidebar out into a standalone chrome.windows popup. The popup page
+// is a static HTML shell in the extension bundle; it opens its own Port to us
+// (so it participates in the same fanout as any tab).
+async function popOut({ roomKey, title }) {
+  const params = new URLSearchParams();
+  if (roomKey) params.set('room', roomKey);
+  if (title) params.set('title', title);
+  const url = chrome.runtime.getURL('popup.html') + '?' + params.toString();
+  await chrome.windows.create({ url, type: 'popup', width: 380, height: 720 });
+  return { ok: true };
+}
+
 // ---------------------------------------------------------------------------
 // Account actions from content scripts. chrome.identity + chrome.storage live
 // here in the worker, so the sidebar UI proxies through us.
@@ -174,12 +190,27 @@ chrome.runtime.onMessage.addListener((m, _sender, sendResponse) => {
         case 'setHandle':
           sendResponse(await setHandle(m.handle));
           break;
+        case 'setColor':
+          sendResponse(await setColor(m.color));
+          break;
         case 'signIn':
           sendResponse({ ok: await signInWithProvider(m.provider) });
+          break;
+        case 'authConfig':
+          sendResponse(await getAuthConfig());
+          break;
+        case 'sendEmailOTP':
+          sendResponse(await sendEmailOTP(m.email));
+          break;
+        case 'verifyEmailOTP':
+          sendResponse({ ok: await verifyEmailOTP(m.email, m.otp) });
           break;
         case 'signOut':
           await signOut();
           sendResponse({ ok: true });
+          break;
+        case 'popOut':
+          sendResponse(await popOut(m));
           break;
         default:
           sendResponse({ error: 'unknown_action' });

@@ -11,7 +11,8 @@
  * in chrome.storage.local and present it as `Authorization: Bearer <token>` on
  * HTTP calls and as `?token=<token>` on the WebSocket. First run silently
  * provisions an ANONYMOUS session (pseudonymous handle, zero friction); the
- * user can later upgrade it in place by linking Google/GitHub.
+ * user can later upgrade it in place by linking Google/GitHub/Discord/Apple
+ * or signing in with an email OTP code.
  */
 
 import { API_URL } from './config.js';
@@ -88,6 +89,16 @@ export async function setHandle(handle) {
   return res.json();
 }
 
+export async function setColor(color) {
+  const res = await authFetch('/me/color', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ color }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? 'color_failed');
+  return res.json();
+}
+
 export async function signOut() {
   await authFetch('/api/auth/sign-out', { method: 'POST' }).catch(() => {});
   await chrome.storage.local.remove('token');
@@ -121,4 +132,41 @@ export async function signInWithProvider(provider) {
     return true;
   }
   return false;
+}
+
+/** Which sign-in methods the server has configured (public, no auth). */
+export async function getAuthConfig() {
+  const res = await fetch(`${API_URL}/auth/config`);
+  return res.ok ? res.json() : { social: [], emailOTP: false };
+}
+
+/** Step 1 of email OTP sign-in — server emails (or logs) a 6-digit code. */
+export async function sendEmailOTP(email) {
+  const token = await ensureToken();
+  const res = await fetch(`${API_URL}/api/auth/email-otp/send-verification-otp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ email, type: 'sign-in' }),
+  });
+  if (!res.ok) throw new Error(`send OTP failed: ${res.status}`);
+  captureRotatedToken(res);
+  return res.json();
+}
+
+/** Step 2 — verify the code and upgrade the current (often anonymous) session. */
+export async function verifyEmailOTP(email, otp) {
+  const token = await ensureToken();
+  const res = await fetch(`${API_URL}/api/auth/sign-in/email-otp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ email, otp }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.message ?? `invalid code (${res.status})`);
+  }
+  captureRotatedToken(res);
+  const data = await res.json().catch(() => ({}));
+  if (data?.token) await storeToken(data.token);
+  return true;
 }

@@ -64,10 +64,14 @@ CREATE TABLE IF NOT EXISTS messages (
     user_id     text NOT NULL,                -- Better Auth user.id (no FK; see header)
     body        text NOT NULL CHECK (char_length(body) BETWEEN 1 AND 500),
     created_at  timestamptz NOT NULL DEFAULT now(),
+    parent_id   uuid,                          -- top-level reply target (1 level deep)
     deleted_at  timestamptz,
     deleted_by  text,
     PRIMARY KEY (id, created_at)
 ) PARTITION BY RANGE (created_at);
+
+-- Idempotent add for pre-parent_id installations.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS parent_id uuid;
 
 CREATE INDEX IF NOT EXISTS messages_room_recent_idx ON messages (room_id, created_at DESC);
 

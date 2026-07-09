@@ -9,6 +9,7 @@ export interface Identity {
   handle: string;
   displayColor: number;
   isBanned: boolean;
+  isAnonymous: boolean;
 }
 
 /** Convert Node's header bag into the Headers object Better Auth expects. */
@@ -25,7 +26,10 @@ async function resolve(headers: Headers): Promise<Identity | null> {
   const session = await auth.api.getSession({ headers });
   if (!session?.user) return null;
 
-  const user = session.user as typeof session.user & { displayColor?: number };
+  const user = session.user as typeof session.user & {
+    displayColor?: number;
+    isAnonymous?: boolean | null;
+  };
   let handle = user.name;
 
   // Anonymous users start with a placeholder name; give them a real handle
@@ -55,6 +59,7 @@ async function resolve(headers: Headers): Promise<Identity | null> {
     handle,
     displayColor: user.displayColor ?? 0,
     isBanned: banned.rows[0]?.blocked ?? false,
+    isAnonymous: Boolean(user.isAnonymous),
   };
 }
 

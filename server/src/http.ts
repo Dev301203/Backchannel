@@ -4,7 +4,7 @@ import { toNodeHandler } from 'better-auth/node';
 import { z } from 'zod';
 import dns from 'node:dns/promises';
 import { auth } from './auth/auth.js';
-import { env } from './env.js';
+import { env, socialEnabled } from './env.js';
 import { logger } from './logger.js';
 import { query } from './db/pool.js';
 import { identityFromHeaders, type Identity } from './auth/session.js';
@@ -72,6 +72,19 @@ export function createApp(): express.Express {
 
   app.use(express.json({ limit: '16kb' }));
 
+  // -- Public auth capabilities (which sign-in methods are configured) ------
+  app.get('/auth/config', (_req, res) => {
+    res.json({
+      social: [
+        ...(socialEnabled.google ? ['google'] : []),
+        ...(socialEnabled.github ? ['github'] : []),
+        ...(socialEnabled.discord ? ['discord'] : []),
+        ...(socialEnabled.apple ? ['apple'] : []),
+      ],
+      emailOTP: true,
+    });
+  });
+
   // -- Health ---------------------------------------------------------------
   app.get('/health', (_req, res) => {
     res.json({ ok: true, node: env.NODE_ID });
@@ -83,7 +96,35 @@ export function createApp(): express.Express {
     requireAuth,
     asyncH(async (_req, res) => {
       const id = (res.locals as Locals).identity!;
-      res.json({ id: id.id, handle: id.handle, color: id.displayColor, isBanned: id.isBanned });
+      res.json({
+        id: id.id,
+        handle: id.handle,
+        color: id.displayColor,
+        isBanned: id.isBanned,
+        isAnonymous: id.isAnonymous,
+      });
+    }),
+  );
+
+  // -- Change display color -------------------------------------------------
+  const colorSchema = z.object({
+    color: z.number().int().min(0).max(11),
+  });
+  app.post(
+    '/me/color',
+    requireAuth,
+    asyncH(async (req, res) => {
+      const parsed = colorSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_color' });
+        return;
+      }
+      const id = (res.locals as Locals).identity!;
+      await query('UPDATE "user" SET "displayColor" = $1, "updatedAt" = now() WHERE id = $2', [
+        parsed.data.color,
+        id.id,
+      ]);
+      res.json({ color: parsed.data.color });
     }),
   );
 

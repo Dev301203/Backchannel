@@ -113,7 +113,13 @@ function send(conn: Conn, obj: unknown): void {
 }
 
 async function handleFrame(conn: Conn, raw: RawData): Promise<void> {
-  let frame: { t?: string; roomKey?: unknown; body?: unknown; title?: unknown };
+  let frame: {
+    t?: string;
+    roomKey?: unknown;
+    body?: unknown;
+    title?: unknown;
+    parentId?: unknown;
+  };
   try {
     frame = JSON.parse(raw.toString());
   } catch {
@@ -148,6 +154,8 @@ async function handleFrame(conn: Conn, raw: RawData): Promise<void> {
       }
       if (!conn.rooms.has(roomKey)) return send(conn, { t: 'error', roomKey, code: 'not_subscribed' });
       if (conn.identity.isBanned) return send(conn, { t: 'error', roomKey, code: 'banned' });
+      // Anonymous users can view but not send. Link a provider to post.
+      if (conn.identity.isAnonymous) return send(conn, { t: 'error', roomKey, code: 'sign_in_required' });
 
       const rate = await checkRateLimit(conn.identity.id);
       if (!rate.allowed) {
@@ -161,13 +169,24 @@ async function handleFrame(conn: Conn, raw: RawData): Promise<void> {
       roomCache.set(roomKey, room);
       if (room.is_locked) return send(conn, { t: 'error', roomKey, code: 'locked' });
 
-      const saved = await insertMessage(room.id, conn.identity.id, mod.body!);
+      // Threads are one level deep. Accept a parentId if the client supplied
+      // one; the client is responsible for only offering reply on top-level
+      // messages. Validate shape here, and let unknown ids simply save as-is —
+      // the client renders orphan replies at the top level.
+      const parentId =
+        typeof frame.parentId === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(frame.parentId)
+          ? frame.parentId
+          : null;
+
+      const saved = await insertMessage(room.id, conn.identity.id, mod.body!, parentId);
       const msg = {
         id: saved.id,
         handle: conn.identity.handle,
         color: conn.identity.displayColor,
         body: mod.body,
         ts: saved.ts,
+        parentId,
       };
       // Round-trip through the bus; every node (incl. us) delivers identically.
       await bus.publish(bus.roomChannel(roomKey), JSON.stringify({ t: 'msg', roomKey, msg }));

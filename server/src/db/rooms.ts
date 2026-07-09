@@ -12,6 +12,7 @@ export interface ChatMessage {
   color: number;
   body: string;
   ts: number; // epoch ms
+  parentId: string | null;
 }
 
 const KEY_RE = /^[^\s\u0000-\u001f]{1,512}$/;
@@ -54,10 +55,11 @@ export async function getRecentMessages(roomId: string, limit: number): Promise<
     id: string;
     body: string;
     created_at: Date;
+    parent_id: string | null;
     handle: string | null;
     color: number | null;
   }>(
-    `SELECT m.id, m.body, m.created_at,
+    `SELECT m.id, m.body, m.created_at, m.parent_id,
             u.name AS handle, u."displayColor" AS color
        FROM messages m
        JOIN "user" u ON u.id = m.user_id
@@ -72,6 +74,7 @@ export async function getRecentMessages(roomId: string, limit: number): Promise<
     color: r.color ?? 0,
     body: r.body,
     ts: r.created_at.getTime(),
+    parentId: r.parent_id,
   }));
 }
 
@@ -80,12 +83,13 @@ export async function insertMessage(
   roomId: string,
   userId: string,
   body: string,
+  parentId: string | null = null,
 ): Promise<{ id: string; ts: number }> {
   const res = await query<{ id: string; created_at: Date }>(
-    `INSERT INTO messages (room_id, user_id, body)
-     VALUES ($1, $2, $3)
+    `INSERT INTO messages (room_id, user_id, body, parent_id)
+     VALUES ($1, $2, $3, $4)
      RETURNING id, created_at`,
-    [roomId, userId, body],
+    [roomId, userId, body, parentId],
   );
   const row = res.rows[0]!;
   // Fire-and-forget-ish counter bump; not in a txn on purpose (hot path).

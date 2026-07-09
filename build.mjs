@@ -58,6 +58,7 @@ async function rasterizeIcons() {
 
 async function copyStatic() {
   await cp('manifest.json', `${OUT}/manifest.json`);
+  await cp('popup.html', `${OUT}/popup.html`);
   if (existsSync('sidebar.css')) await cp('sidebar.css', `${OUT}/sidebar.css`);
   if (existsSync('LICENSE')) await cp('LICENSE', `${OUT}/LICENSE`);
 }
@@ -69,6 +70,9 @@ async function run() {
   const configs = [
     { ...common, entryPoints: ['background.js'], outfile: `${OUT}/background.js`, format: 'esm' },
     { ...common, entryPoints: ['content.js'], outfile: `${OUT}/content.js`, format: 'iife' },
+    // Pop-out window entry — same UI as the docked sidebar, loaded from
+    // popup.html via chrome.windows.create in the service worker.
+    { ...common, entryPoints: ['popup.js'], outfile: `${OUT}/popup.js`, format: 'iife' },
   ];
 
   await copyStatic();
