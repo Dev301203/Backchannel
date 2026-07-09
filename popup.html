@@ -4,9 +4,14 @@
     <meta charset="utf-8">
     <title>Backchannel</title>
     <style>
-      html, body { margin: 0; padding: 0; height: 100%; background: #17171a; }
+      html, body { margin: 0; padding: 0; height: 100%; background: #101014; }
+      @media (prefers-color-scheme: light) {
+        html, body { background: #ffffff; }
+      }
       body { overflow: hidden; }
       #host { height: 100vh; }
+      /* The popout panel has no page edge to hug — drop the sidebar border. */
+      #host .panel { border-left: 0; }
     </style>
   </head>
   <body>

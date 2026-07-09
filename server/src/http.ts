@@ -10,6 +10,8 @@ import { query } from './db/pool.js';
 import { identityFromHeaders, type Identity } from './auth/session.js';
 import { getRoomByKey, getRecentMessages, isValidRoomKey } from './db/rooms.js';
 import { randomHandle } from './auth/handles.js';
+import { ACHIEVEMENTS, getStats, setDisplayBadge } from './achievements.js';
+import { publishIdentityPatch } from './ws.js';
 
 /** Attach the resolved identity (if any) to res.locals. */
 interface Locals {
@@ -90,19 +92,61 @@ export function createApp(): express.Express {
     res.json({ ok: true, node: env.NODE_ID });
   });
 
-  // -- Current identity -----------------------------------------------------
+  // -- Achievement catalog (public; the client renders names/emoji from it) --
+  app.get('/achievements', (_req, res) => {
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.json(ACHIEVEMENTS);
+  });
+
+  // -- Current identity + gamification profile -------------------------------
   app.get(
     '/me',
     requireAuth,
     asyncH(async (_req, res) => {
       const id = (res.locals as Locals).identity!;
+      const { stats, earned } = await getStats(id.id);
       res.json({
         id: id.id,
         handle: id.handle,
         color: id.displayColor,
+        badge: stats.display_badge,
         isBanned: id.isBanned,
         isAnonymous: id.isAnonymous,
+        stats: {
+          messagesSent: stats.messages_sent,
+          roomsPosted: stats.rooms_posted,
+          roomsPioneered: stats.rooms_pioneered,
+          repliesReceived: stats.replies_received,
+          reactionsReceived: stats.reactions_received,
+          reactionsGiven: stats.reactions_given,
+          nightMessages: stats.night_messages,
+          streakDays: stats.streak_days,
+          bestStreak: stats.best_streak,
+        },
+        achievements: earned,
       });
+    }),
+  );
+
+  // -- Choose the badge shown next to the handle -----------------------------
+  const badgeSchema = z.object({ badge: z.string().max(64).nullable() });
+  app.post(
+    '/me/badge',
+    requireAuth,
+    asyncH(async (req, res) => {
+      const parsed = badgeSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_badge' });
+        return;
+      }
+      const id = (res.locals as Locals).identity!;
+      const result = await setDisplayBadge(id.id, parsed.data.badge);
+      if (!result.ok) {
+        res.status(400).json({ error: result.error });
+        return;
+      }
+      publishIdentityPatch(id.id, { badge: parsed.data.badge });
+      res.json({ badge: parsed.data.badge });
     }),
   );
 
@@ -124,6 +168,7 @@ export function createApp(): express.Express {
         parsed.data.color,
         id.id,
       ]);
+      publishIdentityPatch(id.id, { color: parsed.data.color });
       res.json({ color: parsed.data.color });
     }),
   );
@@ -147,15 +192,29 @@ export function createApp(): express.Express {
         return;
       }
       const id = (res.locals as Locals).identity!;
+      // Best-effort uniqueness: the Better-Auth-owned "user" table can't carry
+      // a unique index on name (social sign-ups set name from the provider
+      // profile), but hand-picked handles shouldn't shadow someone else's.
+      const taken = await query(
+        'SELECT 1 FROM "user" WHERE lower(name) = lower($1) AND id <> $2 LIMIT 1',
+        [parsed.data.handle, id.id],
+      );
+      if ((taken.rowCount ?? 0) > 0) {
+        res.status(409).json({ error: 'handle_taken' });
+        return;
+      }
       await query('UPDATE "user" SET name = $1, "updatedAt" = now() WHERE id = $2', [
         parsed.data.handle,
         id.id,
       ]);
+      publishIdentityPatch(id.id, { handle: parsed.data.handle });
       res.json({ handle: parsed.data.handle });
     }),
   );
 
-  // -- Room history backfill (public read) ----------------------------------
+  // -- Room history backfill (public read; auth optional) --------------------
+  // A bearer token isn't required, but when present the response marks which
+  // reactions belong to the viewer so the UI renders them toggled.
   app.get(
     '/rooms/:roomKey/messages',
     asyncH(async (req, res) => {
@@ -170,7 +229,10 @@ export function createApp(): express.Express {
         res.json([]); // room never created = no history yet
         return;
       }
-      res.json(await getRecentMessages(room.id, limit));
+      const viewer = req.headers.authorization
+        ? await identityFromHeaders(req.headers).catch(() => null)
+        : null;
+      res.json(await getRecentMessages(room.id, limit, viewer?.id ?? null));
     }),
   );
 

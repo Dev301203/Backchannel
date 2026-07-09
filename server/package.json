@@ -14,6 +14,7 @@
     "build": "tsup src/index.ts --format esm --target node20 --clean",
     "start:dist": "node dist/index.js",
     "typecheck": "tsc --noEmit",
+    "smoketest": "node smoketest.mjs",
     "migrate": "tsx src/db/migrate.ts",
     "auth:generate": "better-auth generate --output src/auth/schema.sql"
   },

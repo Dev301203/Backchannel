@@ -22,10 +22,12 @@ document.documentElement.appendChild(shadowHost);
 
 let externalToggle = null;
 
+// Both keys go to the sidebar so it can offer a "this page / whole site"
+// scope switcher; it picks which one to join.
 function resolveRoom() {
   const keys = normalize(location.href);
   if (!keys) return null;
-  return keys.pageKey ?? keys.domainKey;
+  return { pageKey: keys.pageKey, domainKey: keys.domainKey };
 }
 
 // Restore persisted width immediately so there's no flash of the default.

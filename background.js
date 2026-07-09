@@ -11,31 +11,42 @@
  * chrome.alarms fallback to reconnect if the worker was killed anyway.
  *
  * Message protocol over the Port (all JSON):
- *   content → sw:  {t:'join',  roomKey, title}      subscribe this tab
- *                  {t:'send',  roomKey, body}        post a message
+ *   content → sw:  {t:'join',  roomKey, title}          subscribe this tab
+ *                  {t:'send',  roomKey, body, parentId?} post a message
+ *                  {t:'typing',roomKey}                  typing signal
+ *                  {t:'react', roomKey, messageId, emoji, op}
  *                  {t:'leave', roomKey}
- *   sw → content:  {t:'msg',   roomKey, msg}         one chat message
- *                  {t:'history', roomKey, msgs}      backfill on join
+ *   sw → content:  {t:'msg',   roomKey, msg}             one chat message
+ *                  {t:'history', roomKey, msgs}          backfill on join/reconnect
  *                  {t:'presence', roomKey, count}
- *                  {t:'status', state}               'connecting'|'open'|'down'
+ *                  {t:'typing', roomKey, handle, color}
+ *                  {t:'react', roomKey, messageId, emoji, count}
+ *                  {t:'achievement', a}                  (no roomKey → all ports)
+ *                  {t:'status', state}                   'connecting'|'open'|'down'
  */
 
 import {
   ensureToken,
+  clearToken,
+  authFetch,
   getProfile,
   setHandle,
   setColor,
+  setBadge,
+  getAchievements,
+  sendReport,
   signOut,
   signInWithProvider,
   getAuthConfig,
   sendEmailOTP,
   verifyEmailOTP,
 } from './auth.js';
-import { API_URL, WS_URL } from './config.js';
+import { WS_URL } from './config.js';
 
 let ws = null;
 let wsState = 'down';
 let backoff = 1000;                 // reconnect backoff, capped below
+let everConnected = false;          // distinguishes first connect from reconnects
 
 // roomKey → Set<Port>  (which tabs care about which rooms)
 const roomPorts = new Map();
@@ -64,16 +75,24 @@ async function ensureSocket() {
 
   ws.onopen = () => {
     backoff = 1000;
+    const isReconnect = everConnected;
+    everConnected = true;
     setState('open');
     // Re-subscribe every room any tab is in (reconnect case)
     for (const roomKey of roomPorts.keys()) {
       ws.send(JSON.stringify({ t: 'sub', roomKey }));
+    }
+    // After a reconnect, messages sent while we were down never reached us —
+    // refetch history for every open room. Sidebars dedupe by message id.
+    if (isReconnect) {
+      for (const roomKey of roomPorts.keys()) void deliverHistory(roomKey);
     }
   };
 
   ws.onmessage = (ev) => {
     const frame = JSON.parse(ev.data);
     if (frame.t === 'ping') { ws.send('{"t":"pong"}'); return; }  // keepalive
+    if (!frame.roomKey) { broadcastAll(frame); return; }          // e.g. achievements
     const ports = roomPorts.get(frame.roomKey);
     if (!ports) return;
     for (const port of ports) {
@@ -81,9 +100,13 @@ async function ensureSocket() {
     }
   };
 
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
     setState('down');
     ws = null;
+    // 4401 = the server rejected our token (expired/revoked session). Retrying
+    // with the same credential would loop forever — drop it so the next
+    // attempt provisions a fresh anonymous identity.
+    if (ev?.code === 4401) void clearToken();
     if (roomPorts.size > 0) {
       setTimeout(ensureSocket, backoff);
       backoff = Math.min(backoff * 2, 30_000);
@@ -94,9 +117,29 @@ async function ensureSocket() {
 
 function setState(state) {
   wsState = state;
+  broadcastAll({ t: 'status', state });
+}
+
+function broadcastAll(frame) {
   for (const port of portRooms.keys()) {
-    try { port.postMessage({ t: 'status', state }); } catch {}
+    try { port.postMessage(frame); } catch {}
   }
+}
+
+// History backfill over plain HTTPS — pub/sub is fire-and-forget, so recent
+// messages always come from the API. Sent with the bearer token so the server
+// can mark which reactions are ours. Failure is non-fatal (cold start, etc.);
+// the sidebar just shows live traffic until the next join.
+async function deliverHistory(roomKey, port = null) {
+  try {
+    const res = await authFetch(`/rooms/${encodeURIComponent(roomKey)}/messages?limit=50`);
+    if (!res.ok) return;
+    const frame = { t: 'history', roomKey, msgs: await res.json() };
+    const targets = port ? [port] : [...(roomPorts.get(roomKey) ?? [])];
+    for (const p of targets) {
+      try { p.postMessage(frame); } catch {}
+    }
+  } catch { /* offline or cold-starting; live frames will still arrive */ }
 }
 
 // Fallback: if Chrome killed the worker while tabs still wanted rooms,
@@ -119,14 +162,23 @@ chrome.runtime.onConnect.addListener((port) => {
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ t: 'sub', roomKey: m.roomKey, title: m.title }));
       }
-      // History backfill over plain HTTPS — pub/sub is fire-and-forget,
-      // so recent messages always come from the API, not the socket.
-      const res = await fetch(`${API_URL}/rooms/${encodeURIComponent(m.roomKey)}/messages?limit=50`);
-      if (res.ok) port.postMessage({ t: 'history', roomKey: m.roomKey, msgs: await res.json() });
+      await deliverHistory(m.roomKey, port);
     }
 
     if (m.t === 'send' && ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ t: 'msg', roomKey: m.roomKey, body: m.body }));
+      const frame = { t: 'msg', roomKey: m.roomKey, body: m.body };
+      if (m.parentId) frame.parentId = m.parentId;
+      ws.send(JSON.stringify(frame));
+    }
+
+    if (m.t === 'typing' && ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ t: 'typing', roomKey: m.roomKey }));
+    }
+
+    if (m.t === 'react' && ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        t: 'react', roomKey: m.roomKey, messageId: m.messageId, emoji: m.emoji, op: m.op,
+      }));
     }
 
     if (m.t === 'leave') removeFromRoom(port, m.roomKey);
@@ -166,12 +218,14 @@ chrome.action.onClicked.addListener((tab) => {
 // Pop the sidebar out into a standalone chrome.windows popup. The popup page
 // is a static HTML shell in the extension bundle; it opens its own Port to us
 // (so it participates in the same fanout as any tab).
-async function popOut({ roomKey, title }) {
+async function popOut({ pageKey, domainKey, roomKey, title }) {
   const params = new URLSearchParams();
+  if (pageKey) params.set('page', pageKey);
+  if (domainKey) params.set('domain', domainKey);
   if (roomKey) params.set('room', roomKey);
   if (title) params.set('title', title);
   const url = chrome.runtime.getURL('popup.html') + '?' + params.toString();
-  await chrome.windows.create({ url, type: 'popup', width: 380, height: 720 });
+  await chrome.windows.create({ url, type: 'popup', width: 400, height: 720 });
   return { ok: true };
 }
 
@@ -192,6 +246,15 @@ chrome.runtime.onMessage.addListener((m, _sender, sendResponse) => {
           break;
         case 'setColor':
           sendResponse(await setColor(m.color));
+          break;
+        case 'setBadge':
+          sendResponse(await setBadge(m.badge));
+          break;
+        case 'achievements':
+          sendResponse(await getAchievements());
+          break;
+        case 'report':
+          sendResponse(await sendReport(m.report));
           break;
         case 'signIn':
           sendResponse({ ok: await signInWithProvider(m.provider) });

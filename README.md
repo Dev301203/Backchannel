@@ -4,27 +4,49 @@ A public chat room for every website. Open the sidebar on any page and you're
 in that page's (or domain's) lobby — like a Twitch chat, but the "channel" is
 the URL you're on.
 
+**Features:**
+
+- 💬 A room for every page, plus a **"whole site" room** — switch scope with
+  one click in the sidebar header
+- 🧵 One-level **threads** (reply to any top-level message)
+- 👍 **Emoji reactions** with live counts
+- ⌨️ **Typing indicators**
+- 🏆 **Achievements & badges** — 14 unlockables (pioneer a room, keep a streak,
+  collect reactions…) with progress bars; wear any earned badge next to your
+  name
+- 🔔 @mentions with self-highlight, clickable links, date dividers, unread
+  "N new messages" pill
+- 🚩 One-click **reporting** into a moderation queue; profanity/spam filter and
+  per-user rate limits on every message
+- 👤 Frictionless **anonymous** viewing; sign in (Google/GitHub/Discord/Apple
+  or email code) to post — the anonymous identity upgrades in place
+
 This repo contains both halves of the system:
 
 ```
-.                      # ← the browser extension (MV3)
-├─ manifest.json       # extension manifest
-├─ background.js       # service worker: owns ONE WebSocket, fans out to tabs
-├─ content.js          # injects the shadow-DOM sidebar, tracks SPA navigation
-├─ normalize.js        # URL → room-key rules (SHARED with the server)
-├─ auth.js             # extension auth client (anonymous + social via Better Auth)
-├─ build.mjs           # esbuild bundler (content/background → dist/)
-├─ schema.sql          # Postgres application schema
-└─ server/             # ← the realtime backend
+.                       # ← the browser extension (MV3)
+├─ manifest.json        # extension manifest
+├─ background.js        # service worker: owns ONE WebSocket, fans out to tabs
+├─ content.js           # injects the shadow-DOM sidebar, tracks SPA navigation
+├─ sidebar.js           # the whole sidebar UI (shared by content script + popout)
+├─ popup.js / popup.html# pop-out window shell (same UI, own window)
+├─ normalize.js         # URL → room-key rules (SHARED with the server)
+├─ auth.js              # extension auth client (anonymous + social via Better Auth)
+├─ build.mjs            # esbuild bundler (content/background/popup → dist/)
+├─ schema.sql           # Postgres application schema
+├─ test/                # jsdom test that drives the sidebar UI end to end
+└─ server/              # ← the realtime backend
+   ├─ smoketest.mjs     # live end-to-end test (run against a running server)
    └─ src/
-      ├─ index.ts      # HTTP + WebSocket entry, graceful shutdown
-      ├─ ws.ts         # sub/unsub/msg protocol, Redis pub/sub fanout, presence
-      ├─ http.ts       # REST: history, reports, domain claims, /me, OAuth bridge
-      ├─ auth/         # Better Auth config + session/handle helpers
-      ├─ db/           # pg pool, room/message queries, migrator
-      ├─ redis.ts      # pub/sub + sharded-pubsub abstraction
-      ├─ presence.ts   # cross-instance "N people here"
-      └─ moderation.ts # profanity filter + Redis rate limiting
+      ├─ index.ts       # HTTP + WebSocket entry, graceful shutdown
+      ├─ ws.ts          # sub/msg/typing/react protocol, fanout, achievements
+      ├─ http.ts        # REST: history, reports, /me, badges, OAuth bridge
+      ├─ achievements.ts# gamification: stats, streaks, unlock rules, catalog
+      ├─ auth/          # Better Auth config + session/handle helpers
+      ├─ db/            # pg pool, room/message/reaction queries, migrator
+      ├─ drivers/       # memory vs Redis: fanout + presence + counters
+      ├─ presence.ts    # cross-instance "N people here"
+      └─ moderation.ts  # content filter + rate limiting
 ```
 
 ## How it works (the 60-second version)
@@ -49,6 +71,13 @@ This repo contains both halves of the system:
    (pseudonymous handle); they can **link Google/GitHub in place** to upgrade the
    same account. The extension uses **bearer tokens** (stored in
    `chrome.storage.local`) because cookies are awkward in extension contexts.
+6. **Gamification.** Every accepted message bumps counters in `user_stats`
+   (messages, distinct rooms, rooms pioneered, replies/reactions received,
+   day streaks…). Achievements are uniform "counter ≥ target" rules in
+   `server/src/achievements.ts`; unlocks arrive as WebSocket frames and toast in
+   the sidebar. Earned badges can be displayed next to the handle on every
+   message. Handle/color/badge changes propagate to **live sockets** over an
+   internal control channel — no reconnect needed.
 
 See [DEPLOYMENT.md](./DEPLOYMENT.md) for the scaling story.
 
@@ -152,8 +181,24 @@ First-class from day one (`server/src/moderation.ts` + the `reports`,
 - per-room roles (owner/mod/ban) and a **domain-claim** program so site owners
   can moderate their own domain's room (DNS TXT or `/.well-known` verification).
 
+## Testing
+
+Two layers, both fast:
+
+```bash
+# UI: drives the real sidebar (threads, reactions, toasts, scope switch,
+# achievements drawer) in jsdom with a stubbed port. No server needed.
+npm run test:ui
+
+# End-to-end: auth → sockets → fanout → reactions → typing → achievements →
+# badges → live identity patch → history → moderation → rate limits.
+# Needs the server running (docker compose up, or npm run dev + postgres).
+cd server && npm run smoketest
+```
+
 ## Scripts
 
-Extension (repo root): `npm run build`, `npm run watch`, `npm run clean`.
+Extension (repo root): `npm run build`, `npm run watch`, `npm run test:ui`,
+`npm run clean`.
 Server (`server/`): `npm run dev`, `npm run start`, `npm run migrate`,
-`npm run typecheck`, `npm run build`.
+`npm run typecheck`, `npm run build`, `npm run smoketest`.

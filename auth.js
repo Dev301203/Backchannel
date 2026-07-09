@@ -22,6 +22,15 @@ export async function getStoredToken() {
   return token ?? null;
 }
 
+/**
+ * Drop the stored token. Called when the server rejects it (WS close 4401) so
+ * the next ensureToken() provisions a fresh anonymous session instead of
+ * retrying a dead credential forever.
+ */
+export async function clearToken() {
+  await chrome.storage.local.remove('token');
+}
+
 async function storeToken(token) {
   if (token) await chrome.storage.local.set({ token });
 }
@@ -96,6 +105,38 @@ export async function setColor(color) {
     body: JSON.stringify({ color }),
   });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? 'color_failed');
+  return res.json();
+}
+
+/** Pick the achievement badge displayed next to the handle (null to clear). */
+export async function setBadge(badge) {
+  const res = await authFetch('/me/badge', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ badge }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? 'badge_failed');
+  return res.json();
+}
+
+// The achievement catalog is static per server version; fetch once per worker.
+let achievementsCache = null;
+export async function getAchievements() {
+  if (achievementsCache) return achievementsCache;
+  const res = await fetch(`${API_URL}/achievements`);
+  if (!res.ok) return [];
+  achievementsCache = await res.json();
+  return achievementsCache;
+}
+
+/** File a report against a message (moderation queue). */
+export async function sendReport({ messageId, messageCreatedAt, roomKey, reason, detail }) {
+  const res = await authFetch('/reports', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ messageId, messageCreatedAt, roomKey, reason, detail }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? 'report_failed');
   return res.json();
 }
 

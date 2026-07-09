@@ -81,3 +81,19 @@ export async function checkRateLimit(userId: string): Promise<RateResult> {
   }
   return { allowed: true };
 }
+
+/** Reactions are cheaper than messages but still capped: 30 per 10s window. */
+export async function checkReactionRateLimit(userId: string): Promise<RateResult> {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const window = Math.floor(nowSec / 10);
+  const n = await counters.incr(`rl:react:${userId}:${window}`, 10);
+  if (n > 30) return { allowed: false, retryAfterSec: 10 };
+  return { allowed: true };
+}
+
+/** Typing signals: at most one relayed per 2s per user (cheap dedupe). */
+export async function checkTypingRateLimit(userId: string): Promise<boolean> {
+  const window = Math.floor(Date.now() / 2000);
+  const n = await counters.incr(`rl:typ:${userId}:${window}`, 2);
+  return n <= 1;
+}

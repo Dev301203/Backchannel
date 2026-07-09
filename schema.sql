@@ -121,6 +121,57 @@ CREATE TABLE IF NOT EXISTS domain_claims (
 );
 
 -- ---------------------------------------------------------------------------
+-- Gamification: per-user counters that power achievements + badges.
+-- One row per user, created lazily on first message. All columns are plain
+-- monotonic counters except the streak pair, which the upsert in
+-- achievements.ts maintains (same-day no-op, yesterday +1, else reset to 1).
+-- display_badge holds the achievement id the user chose to show by their name.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS user_stats (
+    user_id            text PRIMARY KEY,
+    messages_sent      integer NOT NULL DEFAULT 0,
+    rooms_posted       integer NOT NULL DEFAULT 0,  -- distinct rooms posted in
+    rooms_pioneered    integer NOT NULL DEFAULT 0,  -- rooms where they spoke first
+    replies_received   integer NOT NULL DEFAULT 0,
+    reactions_received integer NOT NULL DEFAULT 0,
+    reactions_given    integer NOT NULL DEFAULT 0,
+    night_messages     integer NOT NULL DEFAULT 0,  -- sent 00:00–04:59 UTC
+    streak_days        integer NOT NULL DEFAULT 0,
+    best_streak        integer NOT NULL DEFAULT 0,
+    last_active_date   date,
+    display_badge      text,
+    updated_at         timestamptz NOT NULL DEFAULT now()
+);
+
+-- Which rooms a user has posted in (dedupe set behind rooms_posted).
+CREATE TABLE IF NOT EXISTS user_rooms (
+    user_id   text NOT NULL,
+    room_id   uuid NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    first_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, room_id)
+);
+
+CREATE TABLE IF NOT EXISTS user_achievements (
+    user_id     text NOT NULL,
+    achievement text NOT NULL,
+    earned_at   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, achievement)
+);
+
+-- ---------------------------------------------------------------------------
+-- Emoji reactions. No FK to messages (its PK includes created_at for
+-- partitioning); reaction rows for pruned partitions are swept by retention.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS message_reactions (
+    message_id uuid NOT NULL,
+    user_id    text NOT NULL,
+    emoji      text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (message_id, user_id, emoji)
+);
+CREATE INDEX IF NOT EXISTS message_reactions_msg_idx ON message_reactions (message_id);
+
+-- ---------------------------------------------------------------------------
 -- Reports: user-submitted moderation queue.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS reports (

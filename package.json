@@ -1,16 +1,18 @@
 {
   "name": "backchannel-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Backchannel browser extension (MV3): a public chat room for every website.",
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",
+    "test:ui": "node test/sidebar.dom.test.mjs",
     "clean": "node -e \"import('node:fs').then(fs=>fs.rmSync('dist',{recursive:true,force:true}))\""
   },
   "devDependencies": {
     "esbuild": "^0.24.2",
+    "jsdom": "^29.1.1",
     "sharp": "^0.33.5"
   },
   "dependencies": {

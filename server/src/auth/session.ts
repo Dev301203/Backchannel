@@ -8,6 +8,8 @@ export interface Identity {
   id: string;
   handle: string;
   displayColor: number;
+  /** Achievement id the user displays next to their handle (or null). */
+  badge: string | null;
   isBanned: boolean;
   isAnonymous: boolean;
 }
@@ -46,11 +48,15 @@ async function resolve(headers: Headers): Promise<Identity | null> {
     }
   }
 
-  // Global ban state lives in our own moderation table (kept separate from the
-  // Better-Auth-managed `user` table so the two migration systems don't couple).
-  const banned = await query<{ blocked: boolean }>(
-    `SELECT (is_banned AND (banned_until IS NULL OR banned_until > now())) AS blocked
-       FROM user_moderation WHERE user_id = $1`,
+  // Ban state + display badge in one round trip. Moderation and stats live in
+  // our own tables (kept separate from the Better-Auth-managed `user` table so
+  // the two migration systems don't couple).
+  const extra = await query<{ blocked: boolean | null; badge: string | null }>(
+    `SELECT (um.is_banned AND (um.banned_until IS NULL OR um.banned_until > now())) AS blocked,
+            us.display_badge AS badge
+       FROM (SELECT $1::text AS uid) x
+       LEFT JOIN user_moderation um ON um.user_id = x.uid
+       LEFT JOIN user_stats us ON us.user_id = x.uid`,
     [user.id],
   );
 
@@ -58,7 +64,8 @@ async function resolve(headers: Headers): Promise<Identity | null> {
     id: user.id,
     handle,
     displayColor: user.displayColor ?? 0,
-    isBanned: banned.rows[0]?.blocked ?? false,
+    badge: extra.rows[0]?.badge ?? null,
+    isBanned: extra.rows[0]?.blocked ?? false,
     isAnonymous: Boolean(user.isAnonymous),
   };
 }
